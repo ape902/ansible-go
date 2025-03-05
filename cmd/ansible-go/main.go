@@ -89,7 +89,10 @@ func main() {
 
 	// 初始化日志
 	log := logger.New()
-	// verbose变量已使用，传递给执行器
+	// 设置verbose模式
+	if *verbose {
+		log.SetVerboseMode(true)
+	}
 
 	// 处理初始化命令
 	if *initFlag {
