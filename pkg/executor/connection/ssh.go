@@ -2,6 +2,7 @@ package connection
 
 import (
 	"fmt"
+	"io/ioutil"
 	"sync"
 	"time"
 
@@ -15,8 +16,20 @@ type SSHConnection struct {
 	Host     string
 	Port     int
 	User     string
+	Password string
 	LastUsed time.Time
 	IsInUse  bool
+}
+
+// NewSSHConnection 创建新的SSH连接
+func NewSSHConnection(host string, port int) Connection {
+	return &SSHConnection{
+		Host: host,
+		Port: port,
+		User: "",
+		Password: "",
+		IsInUse: false,
+	}
 }
 
 // SSHConnectionPool 定义SSH连接池
@@ -45,6 +58,14 @@ func (p *SSHConnectionPool) GetConnection(host string, port int, user string, pa
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
+	// 使用全局SSH配置中的用户名和密码（如果未提供特定值）
+	if user == "" {
+		user = p.sshConfig.User
+	}
+	if password == "" {
+		password = p.sshConfig.Password
+	}
+
 	// 生成连接键
 	key := fmt.Sprintf("%s:%d:%s", host, port, user)
 
@@ -68,8 +89,6 @@ func (p *SSHConnectionPool) GetConnection(host string, port int, user string, pa
 	// 添加密码认证
 	if password != "" {
 		authMethods = append(authMethods, ssh.Password(password))
-	} else if p.sshConfig.Password != "" {
-		authMethods = append(authMethods, ssh.Password(p.sshConfig.Password))
 	}
 
 	// 添加密钥认证
@@ -126,6 +145,7 @@ func (p *SSHConnectionPool) GetConnection(host string, port int, user string, pa
 		Host:     host,
 		Port:     port,
 		User:     user,
+		Password: password,
 		LastUsed: time.Now(),
 		IsInUse:  true,
 	}
@@ -187,30 +207,68 @@ func (p *SSHConnectionPool) CleanIdleConnections() {
 	}
 }
 
-// ExecuteCommand 在SSH连接上执行命令
-func (conn *SSHConnection) ExecuteCommand(command string) (string, string, int, error) {
+// Connect 实现Connection接口的Connect方法
+func (conn *SSHConnection) Connect() error {
+	// 从连接实例获取认证信息
+	config := &ssh.ClientConfig{
+		User:            conn.User,
+		Auth:            []ssh.AuthMethod{ssh.Password(conn.Password)}, // 使用连接实例中的密码
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         time.Second * 10,
+	}
+
+	// 建立连接
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", conn.Host, conn.Port), config)
+	if err != nil {
+		return fmt.Errorf("SSH连接失败: %w", err)
+	}
+
+	conn.Client = client
+	return nil
+}
+
+// Disconnect 实现Connection接口的Disconnect方法
+func (conn *SSHConnection) Disconnect() error {
+	if conn.Client != nil {
+		return conn.Client.Close()
+	}
+	return nil
+}
+
+// IsConnected 实现Connection接口的IsConnected方法
+func (conn *SSHConnection) IsConnected() bool {
+	return conn.Client != nil
+}
+
+// GetType 实现Connection接口的GetType方法
+func (conn *SSHConnection) GetType() ConnectionType {
+	return ConnectionTypeSSH
+}
+
+// ExecuteCommand 实现Connection接口的ExecuteCommand方法
+func (conn *SSHConnection) ExecuteCommand(command string) (*ConnectionResult, error) {
 	// 创建会话
 	session, err := conn.Client.NewSession()
 	if err != nil {
-		return "", "", -1, fmt.Errorf("创建SSH会话失败: %w", err)
+		return nil, fmt.Errorf("创建SSH会话失败: %w", err)
 	}
 	defer session.Close()
 
 	// 获取标准输出和标准错误
 	stdout, err := session.StdoutPipe()
 	if err != nil {
-		return "", "", -1, fmt.Errorf("获取标准输出失败: %w", err)
+		return nil, fmt.Errorf("获取标准输出失败: %w", err)
 	}
 
 	stderr, err := session.StderrPipe()
 	if err != nil {
-		return "", "", -1, fmt.Errorf("获取标准错误失败: %w", err)
+		return nil, fmt.Errorf("获取标准错误失败: %w", err)
 	}
 
 	// 执行命令
 	err = session.Start(command)
 	if err != nil {
-		return "", "", -1, fmt.Errorf("启动命令失败: %w", err)
+		return nil, fmt.Errorf("启动命令失败: %w", err)
 	}
 
 	// 读取输出
@@ -239,17 +297,24 @@ func (conn *SSHConnection) ExecuteCommand(command string) (string, string, int, 
 	}
 
 	// 等待命令完成
+	start := time.Now()
 	err = session.Wait()
+	duration := time.Since(start)
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*ssh.ExitError); ok {
 			exitCode = exitErr.ExitStatus()
 		} else {
-			return string(stdoutBytes), string(stderrBytes), -1, fmt.Errorf("等待命令完成失败: %w", err)
+			return nil, fmt.Errorf("等待命令完成失败: %w", err)
 		}
 	}
 
-	return string(stdoutBytes), string(stderrBytes), exitCode, nil
+	return &ConnectionResult{
+		Stdout:   string(stdoutBytes),
+		Stderr:   string(stderrBytes),
+		ExitCode: exitCode,
+		Duration: duration,
+	}, nil
 }
 
 // 加载私钥
@@ -275,7 +340,92 @@ func loadPrivateKey(keyPath, keyPassword string) (ssh.Signer, error) {
 
 // 读取私钥文件
 func readPrivateKeyFile(keyPath string) ([]byte, error) {
-	// 这里应该使用os.ReadFile，但为了简化示例，我们假设已经读取了文件
-	// 在实际实现中，应该使用os.ReadFile读取文件内容
-	return nil, fmt.Errorf("未实现的私钥读取功能")
+	return ioutil.ReadFile(keyPath)
+}
+
+// CopyFile 实现Connection接口的CopyFile方法
+func (conn *SSHConnection) CopyFile(localPath, remotePath string) error {
+	// 读取本地文件
+	content, err := ioutil.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("读取本地文件失败: %w", err)
+	}
+
+	// 创建远程会话
+	session, err := conn.Client.NewSession()
+	if err != nil {
+		return fmt.Errorf("创建SSH会话失败: %w", err)
+	}
+	defer session.Close()
+
+	// 创建远程文件
+	cmd := fmt.Sprintf("cat > %s", remotePath)
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("获取标准输入失败: %w", err)
+	}
+
+	// 启动命令
+	err = session.Start(cmd)
+	if err != nil {
+		return fmt.Errorf("启动命令失败: %w", err)
+	}
+
+	// 写入文件内容
+	_, err = stdin.Write(content)
+	if err != nil {
+		return fmt.Errorf("写入文件内容失败: %w", err)
+	}
+	stdin.Close()
+
+	// 等待命令完成
+	err = session.Wait()
+	if err != nil {
+		return fmt.Errorf("等待命令完成失败: %w", err)
+	}
+
+	return nil
+}
+
+// FetchFile 实现Connection接口的FetchFile方法
+func (conn *SSHConnection) FetchFile(remotePath, localPath string) error {
+	// 创建远程会话
+	session, err := conn.Client.NewSession()
+	if err != nil {
+		return fmt.Errorf("创建SSH会话失败: %w", err)
+	}
+	defer session.Close()
+
+	// 获取标准输出
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("获取标准输出失败: %w", err)
+	}
+
+	// 启动命令
+	cmd := fmt.Sprintf("cat %s", remotePath)
+	err = session.Start(cmd)
+	if err != nil {
+		return fmt.Errorf("启动命令失败: %w", err)
+	}
+
+	// 读取文件内容
+	content, err := ioutil.ReadAll(stdout)
+	if err != nil {
+		return fmt.Errorf("读取文件内容失败: %w", err)
+	}
+
+	// 等待命令完成
+	err = session.Wait()
+	if err != nil {
+		return fmt.Errorf("等待命令完成失败: %w", err)
+	}
+
+	// 写入本地文件
+	err = ioutil.WriteFile(localPath, content, 0644)
+	if err != nil {
+		return fmt.Errorf("写入本地文件失败: %w", err)
+	}
+
+	return nil
 }

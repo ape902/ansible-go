@@ -41,7 +41,7 @@ dist/
 # 本地配置文件
 *.local.yaml
 *.local.yml
-config.yaml
+test-project
 
 # 调试文件
 debug

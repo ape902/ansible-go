@@ -164,20 +164,20 @@ func (e *ExecutionEngine) worker(id int) {
 			}
 
 			// 执行任务
-			e.executeTask(task)
+			_ = e.ExecuteTask(task, nil) // 使用ExecuteTask而不是executeTask
 		}
 	}
 }
 
-// executeTask 执行单个任务
-func (e *ExecutionEngine) executeTask(task *models.Task) {
+// ExecuteTask 执行单个任务
+func (e *ExecutionEngine) ExecuteTask(task *models.Task, taskCtx *models.TaskContext) error {
 	// 更新任务状态为运行中
 	task.Status = models.TaskStatusRunning
 	startTime := time.Now()
 	task.StartTime = &startTime
 
 	// 创建任务上下文，带超时控制
-	ctx, cancel := context.WithTimeout(e.ctx, e.options.Timeout)
+	execCtx, cancel := context.WithTimeout(e.ctx, e.options.Timeout)
 	defer cancel()
 
 	// 获取连接
@@ -187,7 +187,7 @@ func (e *ExecutionEngine) executeTask(task *models.Task) {
 		task.Error = fmt.Errorf("获取连接失败: %w", err)
 		endTime := time.Now()
 		task.EndTime = &endTime
-		return
+		return err
 	}
 	defer e.connManager.ReleaseConnection(conn)
 
@@ -198,7 +198,7 @@ func (e *ExecutionEngine) executeTask(task *models.Task) {
 		task.Error = fmt.Errorf("创建执行器失败: %w", err)
 		endTime := time.Now()
 		task.EndTime = &endTime
-		return
+		return err
 	}
 
 	// 执行任务，支持重试
@@ -210,7 +210,7 @@ func (e *ExecutionEngine) executeTask(task *models.Task) {
 		}
 
 		task.RetryCount = retry
-		result, err = executor.Execute(ctx, task, conn, e.varStore)
+		result, err = executor.Execute(execCtx, task, conn, e.varStore)
 		if err == nil || !shouldRetry(err) {
 			break
 		}
@@ -230,7 +230,16 @@ func (e *ExecutionEngine) executeTask(task *models.Task) {
 		task.Status = models.TaskStatusSkipped
 	} else {
 		task.Status = models.TaskStatusSuccess
+		// 添加命令执行结果的输出
+		if result.Stdout != "" {
+			fmt.Printf("命令输出:\n%s\n", result.Stdout)
+		}
+		if result.Stderr != "" {
+			fmt.Printf("错误输出:\n%s\n", result.Stderr)
+		}
 	}
+
+	return nil
 }
 
 // shouldRetry 判断是否应该重试
