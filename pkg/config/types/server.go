@@ -88,6 +88,9 @@ type SSHConfig struct {
 
 	// 跳转主机配置
 	JumpHost JumpHostConfig `json:"jump_host" yaml:"jump_host" toml:"jump_host"`
+
+	// 最大并行连接数
+	MaxParallel int `json:"max_parallel" yaml:"max_parallel" toml:"max_parallel"`
 }
 
 // JumpHostConfig 定义SSH跳转主机配置

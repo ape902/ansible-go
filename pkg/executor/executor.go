@@ -2,7 +2,6 @@ package executor
 
 import (
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/ape902/ansible-go/pkg/config"
@@ -11,6 +10,7 @@ import (
 	"github.com/ape902/ansible-go/pkg/executor/engine"
 	"github.com/ape902/ansible-go/pkg/executor/executors"
 	"github.com/ape902/ansible-go/pkg/executor/models"
+	"github.com/ape902/ansible-go/pkg/logger"
 	"github.com/ape902/ansible-go/pkg/vars"
 )
 
@@ -20,6 +20,7 @@ type Executor struct {
 	varManager *vars.Manager
 	connPool   *connection.Pool
 	engine     *engine.ExecutionEngine
+	logger     *logger.Logger
 }
 
 // NewExecutor 创建新的执行器
@@ -40,6 +41,7 @@ func NewExecutor(cfg *config.Config) *Executor {
 			executorFactory,
 			engine.DefaultExecutionOptions,
 		),
+		logger:     logger.New(),
 	}
 }
 
@@ -67,22 +69,33 @@ func (e *Executor) Execute(playbookPath string) error {
 func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Store) error {
 	// 检查主机组是否存在
 	hosts := make([]string, 0)
-	log.Printf("开始解析主机组，共有 %d 个主机组", len(taskConfig.Hosts))
+	e.logger.Info("开始解析主机组，共有 %d 个主机组", len(taskConfig.Hosts))
+	e.logger.IncreaseIndent()
+
 	for _, hostGroup := range taskConfig.Hosts {
-		log.Printf("正在处理主机组: %s", hostGroup)
+		e.logger.Info("正在处理主机组: %s", hostGroup)
+		e.logger.IncreaseIndent()
+
 		if hostList, ok := e.config.Inventory[hostGroup]; ok {
-			log.Printf("找到主机组 %s，包含 %d 个主机", hostGroup, len(hostList))
+			e.logger.Success("找到主机组 %s，包含 %d 个主机", hostGroup, len(hostList))
+			e.logger.IncreaseIndent()
+
 			for i, hostInfo := range hostList {
-				log.Printf("主机组 %s 中的主机 #%d: %s (端口: %d, 连接类型: %s)",
-					hostGroup, i, hostInfo.Host, hostInfo.Port, hostInfo.ConnectionType)
+				e.logger.Info("主机 #%d: %s (端口: %d, 连接类型: %s)",
+					i, hostInfo.Host, hostInfo.Port, hostInfo.ConnectionType)
 				hosts = append(hosts, hostInfo.Host)
 			}
+
+			e.logger.DecreaseIndent()
 		} else {
-			log.Printf("警告: 主机组 %s 不存在", hostGroup)
+			e.logger.Warning("警告: 主机组 %s 不存在", hostGroup)
 		}
+
+		e.logger.DecreaseIndent()
 	}
 
-	log.Printf("主机解析完成，共找到 %d 个可用主机", len(hosts))
+	e.logger.DecreaseIndent()
+	e.logger.Success("主机解析完成，共找到 %d 个可用主机", len(hosts))
 	if len(hosts) == 0 {
 		return fmt.Errorf("没有找到可用的主机")
 	}
@@ -93,32 +106,79 @@ func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Sto
 		VarStore: varStore,
 	}
 
-	// 执行任务列表
+	// 创建工作池
+	workerCount := 10 // 默认并发数
+	if e.config.SSH.MaxParallel > 0 {
+		workerCount = e.config.SSH.MaxParallel
+	}
+
+	// 创建任务通道
+	taskChan := make(chan *models.Task, len(hosts)*len(taskConfig.Tasks))
+	errChan := make(chan error, len(hosts)*len(taskConfig.Tasks))
+
+	// 启动工作池
 	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range taskChan {
+				err := e.engine.ExecuteTask(task, ctx)
+				if err != nil {
+					e.logger.Error("在主机 %s 上执行任务 %s 失败: %v", task.Host, task.ID, err)
+					errChan <- err
+				} else if task.Result != nil {
+					// 输出任务执行结果
+					if task.Result.Stdout != "" {
+						e.logger.Output(task.Host, task.ID, task.Result.Stdout)
+					}
+					if task.Result.Stderr != "" {
+						e.logger.Error("主机 %s 上的任务 %s 的错误输出:", task.Host, task.ID)
+						e.logger.Output(task.Host, task.ID, task.Result.Stderr)
+					}
+				}
+			}
+		}()
+	}
+
+	// 分发任务
 	for _, taskSpec := range taskConfig.Tasks {
-		// 处理任务规格映射
 		for taskName, spec := range taskSpec {
-			wg.Add(1)
-			go func(name string, ts types.TaskSpec) {
-				defer wg.Done()
-				// 创建models.Task类型的任务对象
+			for _, host := range hosts {
 				modelsTask := &models.Task{
-					ID:       name,
-					Spec:     &ts,
+					ID:       taskName,
+					Spec:     &spec,
 					Status:   models.TaskStatusPending,
 					Priority: models.TaskPriorityNormal,
-					Host:     hosts[0], // 使用第一个主机，实际应用中应该循环处理所有主机
+					Host:     host,
 					Vars:     make(map[string]interface{}),
 				}
-
-				err := e.engine.ExecuteTask(modelsTask, ctx)
-				if err != nil {
-					log.Printf("执行任务失败: %v", err)
-				}
-			}(taskName, spec)
+				taskChan <- modelsTask
+			}
 		}
 	}
 
+	// 关闭任务通道
+	close(taskChan)
+
+	// 等待所有工作协程完成
 	wg.Wait()
+	close(errChan)
+
+	// 检查是否有错误发生
+	var errs []error
+	for err := range errChan {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("执行任务时发生错误: %v", errs)
+	}
+
 	return nil
+}
+
+// SetVerboseMode 设置详细输出模式
+func (e *Executor) SetVerboseMode(verbose bool) {
+	e.engine.SetVerbose(verbose)
 }

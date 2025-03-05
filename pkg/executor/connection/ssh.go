@@ -117,7 +117,7 @@ func (p *SSHConnectionPool) GetConnection(host string, port int, user string, pa
 		User:            user,
 		Auth:            authMethods,
 		Timeout:         p.timeout,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // 在生产环境中应使用更安全的方法
+		HostKeyCallback: getHostKeyCallback(p.sshConfig),
 	}
 
 	// 尝试连接
@@ -213,7 +213,7 @@ func (conn *SSHConnection) Connect() error {
 	config := &ssh.ClientConfig{
 		User:            conn.User,
 		Auth:            []ssh.AuthMethod{ssh.Password(conn.Password)}, // 使用连接实例中的密码
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // 始终禁用主机密钥检查，避免首次连接时的交互确认
 		Timeout:         time.Second * 10,
 	}
 
@@ -341,6 +341,18 @@ func loadPrivateKey(keyPath, keyPassword string) (ssh.Signer, error) {
 // 读取私钥文件
 func readPrivateKeyFile(keyPath string) ([]byte, error) {
 	return ioutil.ReadFile(keyPath)
+}
+
+// getHostKeyCallback 获取主机密钥验证回调函数
+func getHostKeyCallback(config *types.SSHConfig) ssh.HostKeyCallback {
+	// 如果配置了禁用主机密钥检查，直接返回InsecureIgnoreHostKey
+	if config != nil && config.DisableHostKeyChecking {
+		return ssh.InsecureIgnoreHostKey()
+	}
+
+	// 默认使用InsecureIgnoreHostKey，以避免首次连接时的交互确认
+	// 在生产环境中，应该实现更安全的主机密钥验证机制
+	return ssh.InsecureIgnoreHostKey()
 }
 
 // CopyFile 实现Connection接口的CopyFile方法

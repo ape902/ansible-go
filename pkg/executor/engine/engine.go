@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -231,11 +232,11 @@ func (e *ExecutionEngine) ExecuteTask(task *models.Task, taskCtx *models.TaskCon
 	} else {
 		task.Status = models.TaskStatusSuccess
 		// 添加命令执行结果的输出
-		if result.Stdout != "" {
-			fmt.Printf("命令输出:\n%s\n", result.Stdout)
-		}
+		// if result.Stdout != "" {
+		// 	log.Printf("命令输出:\n%s\n", result.Stdout)
+		// }
 		if result.Stderr != "" {
-			fmt.Printf("错误输出:\n%s\n", result.Stderr)
+			log.Printf("错误输出:\n%s\n", result.Stderr)
 		}
 	}
 
@@ -274,4 +275,9 @@ func (e *ExecutionEngine) GetTaskResult(taskID string) (*models.TaskResult, erro
 		return nil, fmt.Errorf("任务ID %s 尚未完成", taskID)
 	}
 	return task.Result, nil
+}
+
+// SetVerbose 设置详细输出模式
+func (e *ExecutionEngine) SetVerbose(verbose bool) {
+	e.options.Debug = verbose
 }
