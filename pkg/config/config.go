@@ -13,6 +13,16 @@ type Config struct {
 	Inventory map[string][]types.HostInfo `yaml:"inventory"`
 	Vars      map[string]interface{}      `yaml:"vars"`
 	SSH       types.SSHConfig             `yaml:"ssh"`
+	Log       types.LogConfig             `yaml:"log"`
+	Paths     ConfigPaths                 `yaml:"paths,omitempty"`
+}
+
+// ConfigPaths 定义配置路径
+type ConfigPaths struct {
+	VarsDir    string `yaml:"vars_dir"`
+	TasksDir   string `yaml:"tasks_dir"`
+	FilesDir   string `yaml:"files_dir"`
+	ExecutorDir string `yaml:"executor_dir"`
 }
 
 // LoadConfig 从文件加载配置
@@ -21,6 +31,12 @@ func LoadConfig(configPath string) (*Config, error) {
 		return &Config{
 			Inventory: make(map[string][]types.HostInfo),
 			Vars:      make(map[string]interface{}),
+			Paths: ConfigPaths{
+				VarsDir:    "vars",
+				TasksDir:   "tasks",
+				FilesDir:   "files",
+				ExecutorDir: "executor",
+			},
 		}, nil
 	}
 
@@ -35,6 +51,8 @@ func LoadConfig(configPath string) (*Config, error) {
 		Inventory map[string]interface{}    `yaml:"inventory"`
 		Vars      map[string]interface{}    `yaml:"vars"`
 		SSH       types.SSHConfig           `yaml:"ssh"`
+		Log       types.LogConfig           `yaml:"log"`
+		Paths     ConfigPaths               `yaml:"paths"`
 	}
 
 	err = yaml.Unmarshal(data, &rawConfig)
@@ -47,6 +65,22 @@ func LoadConfig(configPath string) (*Config, error) {
 		Inventory: make(map[string][]types.HostInfo),
 		Vars:      rawConfig.Vars,
 		SSH:       rawConfig.SSH,
+		Log:       rawConfig.Log,
+		Paths:     rawConfig.Paths,
+	}
+	
+	// 设置默认路径
+	if cfg.Paths.VarsDir == "" {
+		cfg.Paths.VarsDir = "vars"
+	}
+	if cfg.Paths.TasksDir == "" {
+		cfg.Paths.TasksDir = "tasks"
+	}
+	if cfg.Paths.FilesDir == "" {
+		cfg.Paths.FilesDir = "files"
+	}
+	if cfg.Paths.ExecutorDir == "" {
+		cfg.Paths.ExecutorDir = "executor"
 	}
 
 	// 处理inventory部分

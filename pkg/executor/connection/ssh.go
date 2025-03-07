@@ -86,24 +86,24 @@ func (p *SSHConnectionPool) GetConnection(host string, port int, user string, pa
 	// 创建新连接
 	var authMethods []ssh.AuthMethod
 
-	// 添加密码认证
-	if password != "" {
-		authMethods = append(authMethods, ssh.Password(password))
-	}
-
-	// 添加密钥认证
-	if keyFile != "" || p.sshConfig.KeyFile != "" {
+	// 根据UseKeyAuth字段选择认证方式
+	if p.sshConfig.UseKeyAuth {
+		// 使用密钥认证
 		keyPath := keyFile
 		if keyPath == "" {
 			keyPath = p.sshConfig.KeyFile
 		}
-
 		if keyPath != "" {
 			key, err := loadPrivateKey(keyPath, p.sshConfig.KeyPassword)
 			if err != nil {
 				return nil, fmt.Errorf("加载SSH私钥失败: %w", err)
 			}
 			authMethods = append(authMethods, ssh.PublicKeys(key))
+		}
+	} else {
+		// 使用密码认证
+		if password != "" {
+			authMethods = append(authMethods, ssh.Password(password))
 		}
 	}
 

@@ -51,98 +51,154 @@ sudo mv ansible-go /usr/local/bin/  # Linux/macOS
 
 ```bash
 # 基本初始化
-ansible-go --init
+ansible-go init
 
 # 自定义初始化
-ansible-go --init --name=my-project --path=/path/to/workspace
+ansible-go init --name=my-project --path=/path/to/workspace --template=standard
 ```
 
 初始化参数说明：
-- `--init`：启用初始化模式
+- `init`：初始化子命令
 - `--name`：项目名称（默认：ansible-go-project）
 - `--path`：项目路径（默认：当前目录）
+- `--template`：项目模板类型（可选：standard, minimal, full，默认：standard）
+
+初始化将创建以下目录结构：
+```
+./
+├── config.yaml     # 主配置文件
+├── tasks/         # 任务文件目录
+│   ├── main.yaml  # 主任务文件
+│   └── example.yaml # 示例任务文件
+├── vars/          # 变量文件目录
+│   └── main.yaml  # 主变量文件
+├── files/         # 静态文件目录
+└── executor/      # 执行器配置目录
+```
 
 ### 基础配置
 
 创建 `config.yaml`：
 
 ```yaml
-# 主机清单
+# 主机清单配置
 inventory:
+  # 主机组名: 主机列表
+  localhost: 
+    - host: 127.0.0.1
+      port: 22
+      connection_type: ssh
   webservers:
     - host: "192.168.1.101"
       port: 22
+      connection_type: ssh
       alias: "web1"
     - host: "192.168.1.102"
+      port: 22
+      connection_type: ssh
       alias: "web2"
   dbservers:
     - host: "192.168.1.201"
+      port: 22
+      connection_type: ssh
       alias: "db1"
 
-# SSH配置
+# SSH连接配置
 ssh:
-  user: "deploy"
-  key_file: "~/.ssh/id_rsa"
-  timeout: 30
+  user: root
+  private_key_path: ~/.ssh/id_rsa
+  timeout: 10s
+  known_hosts_file: ~/.ssh/known_hosts
+  use_key_auth: true  # 是否使用密钥认证
+  max_parallel: 5     # 最大并行执行数
 
 # 全局变量
 vars:
   app_version: "1.0.0"
   deploy_path: "/opt/myapp"
   environment: "production"
+
+# 日志配置
+log:
+  level: info
+  format: text
+  file: ./ansible-go.log
 ```
 
 ### 创建任务
 
-创建 `deploy.yaml`：
+创建 `tasks/main.yaml`：
 
 ```yaml
 name: "应用部署"
-hosts:
-  - webservers
+description: "这是一个应用部署任务配置"
+
+# 目标主机组
+hosts: ["webservers", "localhost"]
+
+# 任务变量
 vars:
+  deploy_path: "/opt/myapp"
   app_port: 8080
   app_user: "www-data"
 
+# 任务列表
 tasks:
-  - name: "创建应用目录"
-    module: file
-    args:
-      path: "{{ deploy_path }}/{{ app_version }}"
-      state: directory
-      mode: "0755"
-      owner: "{{ app_user }}"
+  - "创建应用目录":
+      module: "command"
+      args:
+        cmd: "mkdir -p {{ deploy_path }}/{{ app_version }}"
 
-  - name: "部署配置文件"
-    module: template
-    args:
-      src: "./templates/app.conf.j2"
-      dest: "{{ deploy_path }}/config/app.conf"
-      mode: "0644"
-    notify:
-      - restart app
+  - "部署配置文件":
+      module: "command"
+      args:
+        cmd: "cp ./templates/app.conf {{ deploy_path }}/config/app.conf"
 
+# 处理器
 handlers:
-  - name: "restart app"
-    module: command
+  - name: "重启应用"
+    module: "command"
     args:
       cmd: "systemctl restart myapp"
-    when: "environment == 'production'"
 ```
 
 ### 执行任务
 
 ```bash
 # 基本执行
-ansible-go --config=config.yaml --playbook=deploy.yaml
+ansible-go --config=config.yaml
 
 # 高级选项
 ansible-go --config=config.yaml \
-          --playbook=deploy.yaml \
           --parallel=5 \
           --tags=config,service \
           --verbose
 ```
+
+### 检查配置
+
+```bash
+# 检查配置文件合规性
+ansible-go check --config=config.yaml
+
+# 检查特定任务文件
+ansible-go check --task=tasks/example.yaml
+
+# 检查整个项目
+ansible-go check --project=./
+
+# 详细检查报告
+ansible-go check --config=config.yaml --verbose
+```
+
+检查功能会验证：
+- 配置文件语法正确性
+- 任务文件格式规范性
+- 变量引用完整性
+- 模块参数有效性
+- 主机组配置有效性
+- 文件权限合规性
+- SSH连接配置完整性
 
 ## 核心概念
 
