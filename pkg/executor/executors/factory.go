@@ -26,6 +26,7 @@ func NewExecutorFactory() *ExecutorFactory {
 	factory.RegisterExecutor("template", NewTemplateExecutor())
 	factory.RegisterExecutor("copy", NewCopyExecutor())
 	factory.RegisterExecutor("fetch", NewFetchExecutor())
+	factory.RegisterExecutor("import", NewImportExecutor())
 
 	return factory
 }

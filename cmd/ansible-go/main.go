@@ -31,26 +31,31 @@ ssh:
   # 最大并行执行数
   max_parallel: 5
 
-# 主机组配置
-hosts:
+# 主机清单配置
+inventory:
   # 示例组
   web_servers:
-    # 主机列表
-    hosts:
-      - "192.168.1.100"
-      - "192.168.1.101"
-    # 组变量
-    vars:
-      app_port: 8080
-      app_name: "web-app"
+    - host: "192.168.1.100"
+      port: 22
+      connection_type: "ssh"
+      vars:
+        app_port: 8080
+        app_name: "web-app"
+    - host: "192.168.1.101"
+      port: 22
+      connection_type: "ssh"
+      vars:
+        app_port: 8080
+        app_name: "web-app"
   
   # 数据库服务器组
   db_servers:
-    hosts:
-      - "192.168.1.200"
-    vars:
-      db_port: 3306
-      db_name: "app_db"
+    - host: "192.168.1.200"
+      port: 22
+      connection_type: "ssh"
+      vars:
+        db_port: 3306
+        db_name: "app_db"
 
 # 全局变量
 vars:

@@ -344,17 +344,6 @@ ansible-go check --config=config.yaml --verbose
    ansible-go --check --diff
    ```
 
-## 版本说明
-
-### v1.0.0 (2023-10-01)
-- 初始版本发布
-- 核心功能实现
-- 基础模块支持
-
-### v1.1.0 (2023-12-15)
-- 并行执行优化
-- 变量系统增强
-- 新增 fetch 模块
 
 ## 许可证
 

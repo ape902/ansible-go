@@ -41,13 +41,15 @@ type Task struct {
 	EndTime     *time.Time            // 结束时间
 	Result      *TaskResult           // 执行结果
 	Error       error                 // 错误信息
+	FilePath    string                 // 任务文件路径
 }
 
 // TaskResult 定义任务执行结果
 type TaskResult struct {
-	ExitCode    int               // 退出码
-	Stdout      string            // 标准输出
-	Stderr      string            // 标准错误
+	ExitCode      int                        // 退出码
+	Stdout        string                     // 标准输出
+	Stderr        string                     // 标准错误
+	ImportedTasks []map[string]types.TaskSpec // 导入的任务列表
 	Changed     bool              // 是否发生变更
 	Failed      bool              // 是否失败
 	Skipped     bool              // 是否跳过

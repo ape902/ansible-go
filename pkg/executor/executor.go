@@ -1,8 +1,10 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ape902/ansible-go/pkg/config"
 	"github.com/ape902/ansible-go/pkg/config/types"
@@ -41,7 +43,7 @@ func NewExecutor(cfg *config.Config) *Executor {
 			executorFactory,
 			engine.DefaultExecutionOptions,
 		),
-		logger:     logger.New(),
+		logger: logger.New(),
 	}
 }
 
@@ -62,11 +64,11 @@ func (e *Executor) Execute(playbookPath string) error {
 	}
 
 	// 执行任务
-	return e.executeTasks(taskConfig, localVarStore)
+	return e.executeTasks(taskConfig, localVarStore, playbookPath)
 }
 
 // executeTasks 执行任务列表
-func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Store) error {
+func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Store, playbookPath string) error {
 	// 检查主机组是否存在
 	hosts := make([]string, 0)
 	e.logger.Info("开始解析主机组，共有 %d 个主机组", len(taskConfig.Hosts))
@@ -116,6 +118,24 @@ func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Sto
 	taskChan := make(chan *models.Task, len(hosts)*len(taskConfig.Tasks))
 	errChan := make(chan error, len(hosts)*len(taskConfig.Tasks))
 
+	// 使用互斥锁保护任务通道的关闭操作
+	var taskChanMutex sync.Mutex
+	taskChanClosed := false
+
+	// 用于跟踪任务处理的WaitGroup
+	var taskWg sync.WaitGroup
+
+	// 安全地发送任务到通道
+	sendTask := func(task *models.Task) {
+		taskChanMutex.Lock()
+		defer taskChanMutex.Unlock()
+		if !taskChanClosed {
+			taskChan <- task
+		} else {
+			e.logger.Warning("任务通道已关闭，无法发送任务 %s 到主机 %s", task.ID, task.Host)
+		}
+	}
+
 	// 启动工作池
 	var wg sync.WaitGroup
 	for i := 0; i < workerCount; i++ {
@@ -123,7 +143,14 @@ func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Sto
 		go func() {
 			defer wg.Done()
 			for task := range taskChan {
-				err := e.engine.ExecuteTask(task, ctx)
+				// 标记任务开始处理
+				taskWg.Add(1)
+
+				// 创建上下文，包含任务上下文和执行引擎
+				taskExecCtx := context.WithValue(context.Background(), "taskContext", ctx)
+				taskExecCtx = context.WithValue(taskExecCtx, "engine", e.engine)
+
+				err := e.engine.ExecuteTask(task, ctx, taskExecCtx)
 				if err != nil {
 					e.logger.Error("在主机 %s 上执行任务 %s 失败: %v", task.Host, task.ID, err)
 					errChan <- err
@@ -136,7 +163,31 @@ func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Sto
 						e.logger.Error("主机 %s 上的任务 %s 的错误输出:", task.Host, task.ID)
 						e.logger.Output(task.Host, task.ID, task.Result.Stderr)
 					}
+
+					// 处理导入的任务
+					if task.Result.ImportedTasks != nil && len(task.Result.ImportedTasks) > 0 {
+						e.logger.Info("处理导入的任务，共 %d 个任务集", len(task.Result.ImportedTasks))
+						for _, importedTaskSpec := range task.Result.ImportedTasks {
+							for taskName, spec := range importedTaskSpec {
+								for _, host := range hosts {
+									importedTask := &models.Task{
+										ID:       taskName,
+										Spec:     &spec,
+										Status:   models.TaskStatusPending,
+										Priority: models.TaskPriorityNormal,
+										Host:     host,
+										Vars:     make(map[string]interface{}),
+										FilePath: task.FilePath,
+									}
+									sendTask(importedTask)
+								}
+							}
+						}
+					}
 				}
+
+				// 标记任务处理完成
+				taskWg.Done()
 			}
 		}()
 	}
@@ -152,14 +203,32 @@ func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Sto
 					Priority: models.TaskPriorityNormal,
 					Host:     host,
 					Vars:     make(map[string]interface{}),
+					FilePath: playbookPath,
 				}
-				taskChan <- modelsTask
+				sendTask(modelsTask)
 			}
 		}
 	}
 
-	// 关闭任务通道
-	close(taskChan)
+	// 等待所有任务添加完成并处理完成
+	// 使用一个额外的goroutine来安全关闭通道
+	go func() {
+		// 等待所有任务处理完成
+		// 这里使用taskWg来跟踪所有任务（包括动态导入的任务）
+		taskWg.Wait()
+
+		// 确保所有导入的任务也有机会被处理
+		// 添加一个小延迟，确保所有导入任务都被添加到队列
+		time.Sleep(100 * time.Millisecond)
+
+		// 安全地关闭任务通道
+		taskChanMutex.Lock()
+		if !taskChanClosed {
+			taskChanClosed = true
+			close(taskChan)
+		}
+		taskChanMutex.Unlock()
+	}()
 
 	// 等待所有工作协程完成
 	wg.Wait()

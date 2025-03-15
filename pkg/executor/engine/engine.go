@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -171,14 +170,23 @@ func (e *ExecutionEngine) worker(id int) {
 }
 
 // ExecuteTask 执行单个任务
-func (e *ExecutionEngine) ExecuteTask(task *models.Task, taskCtx *models.TaskContext) error {
+func (e *ExecutionEngine) ExecuteTask(task *models.Task, taskCtx *models.TaskContext, execContext ...context.Context) error {
 	// 更新任务状态为运行中
 	task.Status = models.TaskStatusRunning
 	startTime := time.Now()
 	task.StartTime = &startTime
 
 	// 创建任务上下文，带超时控制
-	execCtx, cancel := context.WithTimeout(e.ctx, e.options.Timeout)
+	var execCtx context.Context
+	var cancel context.CancelFunc
+	
+	if len(execContext) > 0 && execContext[0] != nil {
+		// 使用传入的上下文，但添加超时控制
+		execCtx, cancel = context.WithTimeout(execContext[0], e.options.Timeout)
+	} else {
+		// 使用默认上下文
+		execCtx, cancel = context.WithTimeout(e.ctx, e.options.Timeout)
+	}
 	defer cancel()
 
 	// 获取连接
@@ -231,13 +239,7 @@ func (e *ExecutionEngine) ExecuteTask(task *models.Task, taskCtx *models.TaskCon
 		task.Status = models.TaskStatusSkipped
 	} else {
 		task.Status = models.TaskStatusSuccess
-		// 添加命令执行结果的输出
-		// if result.Stdout != "" {
-		// 	log.Printf("命令输出:\n%s\n", result.Stdout)
-		// }
-		if result.Stderr != "" {
-			log.Printf("错误输出:\n%s\n", result.Stderr)
-		}
+		// 命令执行结果的输出由executor.go处理，这里不再重复输出
 	}
 
 	return nil
