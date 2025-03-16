@@ -78,7 +78,36 @@ func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Sto
 		e.logger.Info("正在处理主机组: %s", hostGroup)
 		e.logger.IncreaseIndent()
 
-		if hostList, ok := e.config.Inventory[hostGroup]; ok {
+		// 特殊处理 "all" 关键字，表示所有主机
+		if hostGroup == "all" {
+			e.logger.Info("处理特殊主机组 'all'，将包含所有已定义的主机")
+			e.logger.IncreaseIndent()
+			
+			// 遍历所有主机组
+			for groupName, hostList := range e.config.Inventory {
+				e.logger.Info("从主机组 %s 添加 %d 个主机", groupName, len(hostList))
+				
+				for i, hostInfo := range hostList {
+					e.logger.Info("主机 #%d: %s (端口: %d, 连接类型: %s)",
+						i, hostInfo.Host, hostInfo.Port, hostInfo.ConnectionType)
+					
+					// 检查主机是否已经添加，避免重复
+					duplicateFound := false
+					for _, existingHost := range hosts {
+						if existingHost == hostInfo.Host {
+							duplicateFound = true
+							break
+						}
+					}
+					
+					if !duplicateFound {
+						hosts = append(hosts, hostInfo.Host)
+					}
+				}
+			}
+			
+			e.logger.DecreaseIndent()
+		} else if hostList, ok := e.config.Inventory[hostGroup]; ok {
 			e.logger.Success("找到主机组 %s，包含 %d 个主机", hostGroup, len(hostList))
 			e.logger.IncreaseIndent()
 
@@ -102,6 +131,74 @@ func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Sto
 		return fmt.Errorf("没有找到可用的主机")
 	}
 
+	// 添加SSH连接预检查
+	e.logger.Info("开始进行SSH连接预检查...")
+	e.logger.IncreaseIndent()
+	
+	// 使用WaitGroup等待所有连接检查完成
+	var connWg sync.WaitGroup
+	connErrors := make(map[string]error)
+	var connMutex sync.Mutex
+	
+	// 对每个主机进行连接检查
+	for _, host := range hosts {
+		connWg.Add(1)
+		go func(h string) {
+			defer connWg.Done()
+			
+			// 声明连接变量
+			var conn connection.Connection
+			var err error
+			
+			// 尝试获取连接
+			conn, err = e.engine.GetConnectionManager().GetConnection(h, 22, connection.ConnectionTypeSSH)
+			if err != nil {
+				e.logger.Error("主机 %s 连接失败: %v", h, err)
+				connMutex.Lock()
+				connErrors[h] = err
+				connMutex.Unlock()
+				return
+			}
+			
+			// 检查连接是否成功
+			if !conn.IsConnected() {
+				e.logger.Error("主机 %s 连接状态检查失败", h)
+				connMutex.Lock()
+				connErrors[h] = fmt.Errorf("连接状态检查失败")
+				connMutex.Unlock()
+				return
+			}
+			
+			// 执行简单命令验证连接
+			_, err = conn.ExecuteCommand("echo 'Connection test'")
+			if err != nil {
+				e.logger.Error("主机 %s 连接测试失败: %v", h, err)
+				connMutex.Lock()
+				connErrors[h] = err
+				connMutex.Unlock()
+				return
+			}
+			
+			e.logger.Success("主机 %s 连接成功", h)
+			
+			// 释放连接
+			e.engine.GetConnectionManager().ReleaseConnection(conn)
+		}(host)
+	}
+	
+	// 等待所有连接检查完成
+	connWg.Wait()
+	
+	// 检查是否有连接错误
+	if len(connErrors) > 0 {
+		e.logger.Error("SSH连接预检查失败，有 %d 个主机连接失败", len(connErrors))
+		// 不再重复输出每个主机的错误信息，因为在连接检查过程中已经输出过
+		return fmt.Errorf("SSH连接预检查失败，有 %d 个主机连接失败", len(connErrors))
+	}
+	
+	e.logger.Success("SSH连接预检查完成，所有主机连接成功")
+	e.logger.DecreaseIndent()
+	
 	// 创建任务上下文
 	ctx := &models.TaskContext{
 		Hosts:    hosts,
@@ -150,6 +247,7 @@ func (e *Executor) executeTasks(taskConfig *types.TaskConfig, varStore *vars.Sto
 				taskExecCtx := context.WithValue(context.Background(), "taskContext", ctx)
 				taskExecCtx = context.WithValue(taskExecCtx, "engine", e.engine)
 
+				// 执行任务
 				err := e.engine.ExecuteTask(task, ctx, taskExecCtx)
 				if err != nil {
 					e.logger.Error("在主机 %s 上执行任务 %s 失败: %v", task.Host, task.ID, err)

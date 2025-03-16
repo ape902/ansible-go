@@ -283,3 +283,8 @@ func (e *ExecutionEngine) GetTaskResult(taskID string) (*models.TaskResult, erro
 func (e *ExecutionEngine) SetVerbose(verbose bool) {
 	e.options.Debug = verbose
 }
+
+// GetConnectionManager 获取连接管理器
+func (e *ExecutionEngine) GetConnectionManager() connection.ConnectionManager {
+	return e.connManager
+}
