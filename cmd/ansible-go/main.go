@@ -18,32 +18,38 @@ const configTemplate = `# ansible-go 配置文件
 
 # SSH连接配置
 ssh:
-  # 默认用户名
-  user: root
-  # 默认密码，建议使用密钥认证
-  password: ""
-  # 密钥文件路径
-  key_file: "~/.ssh/id_rsa"
-  # 密钥密码
-  key_password: ""
-  # 连接超时时间（秒）
-  timeout: 10
-  # 最大并行执行数
-  max_parallel: 5
+  user: root                  # 默认用户名
+  # 认证方式：选择一种即可
+  password: ""                # 密码认证（留空则使用密钥认证）
+  key_file: "~/.ssh/id_rsa"   # 密钥文件路径
+  key_password: ""            # 密钥密码（如果密钥有密码保护）
+  # 高级选项
+  timeout: 10                # 连接超时时间（秒）
+  max_parallel: 5            # 最大并行执行数
 
 # 主机清单配置
 inventory:
-  # 示例组
+  # 简化格式 - 直接使用主机名列表
+  simple_servers: ["192.168.1.101", "192.168.1.102"]
+  
+  # 别名格式 - 使用主机名:别名映射
+  alias_servers:
+    "192.168.1.103": "web1"
+    "192.168.1.104": "web2"
+  
+  # 详细格式 - 完整主机配置
   web_servers:
     - host: "192.168.1.100"
       port: 22
       connection_type: "ssh"
+      alias: "web-prod1"
       vars:
         app_port: 8080
         app_name: "web-app"
     - host: "192.168.1.101"
       port: 22
       connection_type: "ssh"
+      alias: "web-prod2"
       vars:
         app_port: 8080
         app_name: "web-app"

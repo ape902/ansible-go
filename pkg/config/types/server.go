@@ -77,7 +77,8 @@ type SSHConfig struct {
 	// 连接超时时间(秒)
 	Timeout int `json:"timeout" yaml:"timeout" toml:"timeout"`
 
-	// 是否使用密钥认证
+	// 是否使用密钥认证（当为true时使用密钥认证，为false时使用密码认证）
+	// 如果Password为空且KeyFile不为空，则自动设置为true
 	UseKeyAuth bool `json:"use_key_auth" yaml:"use_key_auth" toml:"use_key_auth"`
 
 	// 是否禁用主机密钥检查

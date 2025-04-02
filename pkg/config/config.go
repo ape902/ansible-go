@@ -139,6 +139,21 @@ func LoadConfig(configPath string) (*Config, error) {
 
 		case []types.HostInfo: // 已经是HostInfo类型，直接使用
 			cfg.Inventory[groupName] = hostList
+			
+		case map[string]interface{}: // 别名格式 {"192.168.1.103": "web1", "192.168.1.104": "web2"}
+			hostInfos := make([]types.HostInfo, 0, len(hostList))
+			for host, alias := range hostList {
+				if aliasStr, ok := alias.(string); ok {
+					hostInfos = append(hostInfos, types.HostInfo{
+						Host:           host,
+						Port:           22, // 默认SSH端口
+						ConnectionType: "ssh", // 默认连接类型
+						Alias:          aliasStr,
+						Vars:           make(map[string]interface{}),
+					})
+				}
+			}
+			cfg.Inventory[groupName] = hostInfos
 
 		default:
 			// 尝试将单个map转换为主机列表

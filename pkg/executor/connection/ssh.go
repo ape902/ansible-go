@@ -86,25 +86,31 @@ func (p *SSHConnectionPool) GetConnection(host string, port int, user string, pa
 	// 创建新连接
 	var authMethods []ssh.AuthMethod
 
-	// 根据UseKeyAuth字段选择认证方式
-	if p.sshConfig.UseKeyAuth {
+	// 自动选择认证方式或根据UseKeyAuth字段选择认证方式
+	// 1. 如果UseKeyAuth为true，优先使用密钥认证
+	// 2. 如果密码为空且密钥文件不为空，使用密钥认证
+	// 3. 如果密码不为空且UseKeyAuth为false，使用密码认证
+	useKeyAuth := p.sshConfig.UseKeyAuth
+	keyPath := keyFile
+	if keyPath == "" {
+		keyPath = p.sshConfig.KeyFile
+	}
+	
+	// 如果密码为空且密钥文件不为空，自动使用密钥认证
+	if password == "" && keyPath != "" {
+		useKeyAuth = true
+	}
+	
+	if useKeyAuth && keyPath != "" {
 		// 使用密钥认证
-		keyPath := keyFile
-		if keyPath == "" {
-			keyPath = p.sshConfig.KeyFile
+		key, err := loadPrivateKey(keyPath, p.sshConfig.KeyPassword)
+		if err != nil {
+			return nil, fmt.Errorf("加载SSH私钥失败: %w", err)
 		}
-		if keyPath != "" {
-			key, err := loadPrivateKey(keyPath, p.sshConfig.KeyPassword)
-			if err != nil {
-				return nil, fmt.Errorf("加载SSH私钥失败: %w", err)
-			}
-			authMethods = append(authMethods, ssh.PublicKeys(key))
-		}
-	} else {
+		authMethods = append(authMethods, ssh.PublicKeys(key))
+	} else if password != "" {
 		// 使用密码认证
-		if password != "" {
-			authMethods = append(authMethods, ssh.Password(password))
-		}
+		authMethods = append(authMethods, ssh.Password(password))
 	}
 
 	// 如果没有认证方法，返回错误
